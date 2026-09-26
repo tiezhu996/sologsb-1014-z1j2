@@ -154,6 +154,15 @@ export class ProofStore {
     this.save();
   }
 
+  importDocument(document: ProofDocument): void {
+    this.undoStack.push(clone(this.documents));
+    this.documents.unshift(document);
+    this.activeId = document.id;
+    this.selectedStepId = document.steps[0]?.id ?? '';
+    this.compareVersionId = '';
+    this.save();
+  }
+
   removeDocument(id: string): void {
     if (this.documents.length <= 1) {
       this.notify('至少保留一个证明文档');

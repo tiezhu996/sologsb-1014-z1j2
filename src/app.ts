@@ -1,6 +1,7 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
 import { compareVersion, ProofStore, RULES } from './store';
+import { importProof, type ImportResult } from './import';
 import type { ProofDocument, ProofStep } from './types';
 
 const store = new ProofStore();
@@ -85,6 +86,9 @@ function exportLatex(document: ProofDocument): string {
 }
 
 export class ProofApp implements Component {
+  importOpen = false;
+  importDraft = '';
+  importResult: ImportResult | null = null;
   private readonly onKeyDown = (event: KeyboardEvent) => {
     const target = event.target as HTMLElement;
     const inEditor = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
@@ -137,6 +141,128 @@ export class ProofApp implements Component {
 
   onremove(): void {
     window.removeEventListener('keydown', this.onKeyDown);
+  }
+
+  openImport(): void {
+    this.importOpen = true;
+    this.importDraft = '';
+    this.importResult = null;
+  }
+
+  closeImport(): void {
+    this.importOpen = false;
+    this.importDraft = '';
+    this.importResult = null;
+  }
+
+  runImport(): void {
+    this.importResult = importProof(this.importDraft);
+    if (!this.importResult) store.notify('没有可读入的内容');
+  }
+
+  readImportFile(file: File | undefined | null): void {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      this.importDraft = String(reader.result ?? '');
+      this.importResult = null;
+      m.redraw();
+    };
+    reader.readAsText(file);
+  }
+
+  confirmImport(): void {
+    const result = this.importResult;
+    if (!result) return;
+    store.importDocument(result.document);
+    this.closeImport();
+    const warnings = result.notices.filter((notice) => notice.severity !== 'info').length;
+    store.notify(warnings ? `已读回 ${result.document.steps.length} 步，${warnings} 处需核对` : `已读回 ${result.document.steps.length} 步`);
+    m.redraw();
+  }
+
+  importDialog(): m.Children {
+    if (!this.importOpen) return null;
+    const result = this.importResult;
+    const formatLabel: Record<string, string> = { markdown: 'Markdown', latex: 'LaTeX', text: '纯文本' };
+    return m('div.import-overlay', { onclick: () => this.closeImport() }, [
+      m('section.import-dialog', { onclick: (event: Event) => event.stopPropagation() }, [
+        m('header.import-head', [
+          m('div', [m('span.eyebrow', 'READ BACK'), m('h2', '读回证明稿')]),
+          m('button.delete', { onclick: () => this.closeImport(), title: '关闭', 'aria-label': '关闭' }),
+        ]),
+        !result && m('div.import-input-pane', [
+          m('p.import-hint', '把群里发回的导出稿（Markdown / LaTeX）直接粘贴到下面，或选择 .md / .tex / .txt 文件。读不明白的段落会原样保留，不会整篇丢弃。'),
+          m('textarea.textarea.import-textarea', {
+            placeholder: '在此粘贴证明稿全文……',
+            value: this.importDraft,
+            oninput: (event: Event) => { this.importDraft = (event.target as HTMLTextAreaElement).value; },
+          }),
+          m('div.import-toolbar', [
+            m('label.button.is-small.is-white', [
+              '选择文件',
+              m('input.import-file-input', {
+                type: 'file',
+                accept: '.md,.markdown,.tex,.latex,.txt,text/markdown,text/plain,application/x-tex',
+                onchange: (event: Event) => this.readImportFile((event.target as HTMLInputElement).files?.[0]),
+              }),
+            ]),
+            m('span.import-file-note', '内容只在本机浏览器中解析'),
+            m('button.button.is-small.is-link', { onclick: () => this.runImport(), disabled: !this.importDraft.trim() }, '解析并预览'),
+          ]),
+        ]),
+        result && m('div.import-preview-pane', [
+          m('div.import-summary', [
+            m('span.tag.is-info', `识别为 ${formatLabel[result.format] ?? result.format}`),
+            m('span.tag.is-success', `恢复 ${result.recoveredSteps} 个步骤`),
+            result.unparsedChunks > 0 && m('span.tag.is-warning', `${result.unparsedChunks} 段原样保留`),
+            m('span.count-badge', `${result.notices.length} 条提示`),
+            m('button.button.is-small.is-white.import-back', { onclick: () => { this.importResult = null; } }, '← 重新粘贴'),
+          ]),
+          m('div.import-body', [
+            m('div.import-preview', [
+              m('h3.import-preview-title', result.document.title),
+              m('div.import-goal', [m('span.field-label', '证明目标'), m('div.goal-formula', renderRichText(result.document.goal ? `$${result.document.goal}$` : '（未识别到目标）'))]),
+              m('div.import-steps', result.document.steps.map((step, index) => {
+                const dangling = step.note.split('\n').filter((line) => line.includes('原稿有此引用'));
+                const preserved = step.note.split('\n').some((line) => line.includes('无法识别为标准证明步骤'));
+                return m('article.import-step', { class: preserved ? 'is-preserved' : '' }, [
+                  m('div.import-step-head', [
+                    m('span.step-number', String(index + 1).padStart(2, '0')),
+                    m('span.tag', { class: step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : 'is-light' }, typeLabel[step.type]),
+                    m('span.rule-chip', step.rule || '（未填规则）'),
+                    preserved && m('span.tag.is-warning', '原文保留'),
+                  ]),
+                  m('div.step-statement', renderRichText(step.statement)),
+                  m('div.step-footer', [
+                    m('span', step.references.length ? `依据：${step.references.map((id) => {
+                      const refIndex = result.document.steps.findIndex((item) => item.id === id);
+                      return `步骤 ${refIndex + 1}`;
+                    }).join('、')}` : '独立前提'),
+                    dangling.length > 0 && m('span.has-counterexample', dangling.join('；')),
+                    step.note && !preserved && m('span.has-note', '含旁注'),
+                    step.counterexample && m('span.has-counterexample', '含反例'),
+                    step.alternative && m('span.has-branch', '含替代分支'),
+                  ]),
+                ]);
+              })),
+            ]),
+            m('div.import-notices', [
+              m('div.panel-heading', [m('span', '读回提示'), m('span.count-badge', result.notices.length)]),
+              result.notices.length === 0 && m('p.empty-copy', '全部字段都顺利恢复，没有需要特别核对的地方。'),
+              m('div.import-notice-list', result.notices.map((notice) => m('div.import-notice', { class: notice.severity }, [
+                m('span.check-icon', notice.severity === 'error' ? '×' : notice.severity === 'warning' ? '!' : '✓'),
+                m('span', notice.line ? `第 ${notice.line} 行：${notice.message}` : notice.message),
+              ]))),
+            ]),
+          ]),
+          m('div.import-confirm-bar', [
+            m('span', '确认后将作为新的证明文档加入左侧列表，可用撤销恢复。'),
+            m('button.button.is-link.is-small', { onclick: () => this.confirmImport() }, '读入并继续编辑'),
+          ]),
+        ]),
+      ]),
+    ]);
   }
 
   view(): m.Children {
@@ -209,6 +335,7 @@ export class ProofApp implements Component {
               m('div.editor-meta', [`${document.author} · ${document.steps.length} 个步骤`, m('span.keyboard-hint', '拖动 ⠿ 排序')]),
             ]),
             m('div.export-actions', [
+              m('button.button.is-small.is-white', { onclick: () => this.openImport() }, '⤓ 读回稿件'),
               m('button.button.is-small', { onclick: () => download(`${document.title}.md`, exportMarkdown(document), 'text/markdown;charset=utf-8') }, '导出 Markdown'),
               m('button.button.is-small', { onclick: () => download(`${document.title}.tex`, exportLatex(document), 'application/x-tex;charset=utf-8') }, '导出 LaTeX'),
             ]),
@@ -354,6 +481,7 @@ export class ProofApp implements Component {
           ]),
         ]),
       ]),
+      this.importDialog(),
       selectedVersion && m('div.diff-overlay', { onclick: () => { store.compareVersionId = ''; m.redraw(); } }, [
         m('section.diff-dialog', { onclick: (event: Event) => event.stopPropagation() }, [
           m('header.diff-head', [

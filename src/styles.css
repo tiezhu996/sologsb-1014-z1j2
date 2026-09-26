@@ -201,6 +201,40 @@ kbd { padding: 2px 5px; border: 1px solid #c8d1da; border-bottom-width: 2px; bor
 .diff-label { color: #657385; background: #fafbfc; }
 .toast-notification { position: fixed; right: 24px; bottom: 24px; z-index: 80; padding: 11px 16px; border-radius: 9px; color: #fff; background: #173f60; box-shadow: 0 10px 30px rgba(17,47,70,.25); font-size: 12px; }
 
+.import-overlay { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: rgba(15,29,43,.52); backdrop-filter: blur(4px); }
+.import-dialog { width: min(1080px, 95vw); max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: #fff; box-shadow: 0 24px 80px rgba(10,25,40,.28); }
+.import-head { padding: 17px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); }
+.import-head h2 { margin: 3px 0 0; font-size: 18px; }
+.import-input-pane { padding: 18px 20px; display: grid; gap: 12px; }
+.import-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.import-textarea { width: 100%; min-height: 300px; font: 12px/1.7 Consolas, "Noto Sans SC", monospace; resize: vertical; }
+.import-toolbar { display: flex; align-items: center; gap: 10px; }
+.import-toolbar .button { margin: 0; }
+.import-toolbar .is-link { margin-left: auto; }
+.import-file-input { display: none; }
+.import-file-note { color: #9aa6b4; font-size: 10px; }
+.import-preview-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.import-summary { padding: 11px 20px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.import-back { margin-left: auto; }
+.import-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 320px; }
+.import-preview { padding: 14px 20px; overflow: auto; border-right: 1px solid var(--line); }
+.import-preview-title { margin: 0 0 10px; font: 700 18px/1.4 "Noto Serif SC", Georgia, serif; }
+.import-goal { margin-bottom: 12px; }
+.import-goal .field-label { margin: 0 0 4px; }
+.import-steps { display: grid; gap: 8px; }
+.import-step { border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; background: #fff; }
+.import-step.is-preserved { border-style: dashed; border-color: #dcb96a; background: #fffdf6; }
+.import-step-head { display: flex; align-items: center; gap: 7px; }
+.import-step .step-statement { margin: 8px 2px; font-size: 15px; }
+.import-notices { display: flex; flex-direction: column; overflow: hidden; background: #fafbfc; }
+.import-notice-list { padding: 10px; display: grid; gap: 7px; overflow: auto; }
+.import-notice { display: grid; grid-template-columns: 19px 1fr; gap: 6px; align-items: start; padding: 8px 9px; border-radius: 8px; font-size: 11px; line-height: 1.55; }
+.import-notice.error { color: #8f2532; background: #fff0f2; }
+.import-notice.warning { color: #875b13; background: #fff7e5; }
+.import-notice.info { color: #27674f; background: #effaf5; }
+.import-notice .check-icon { width: 17px; height: 17px; font-size: 10px; }
+.import-confirm-bar { padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+
 @media (max-width: 1220px) {
   .workspace { grid-template-columns: 210px minmax(470px, 1fr); }
   .right-rail { grid-column: 1 / -1; position: static; grid-template-columns: repeat(3, 1fr); }
@@ -219,4 +253,7 @@ kbd { padding: 2px 5px; border: 1px solid #c8d1da; border-bottom-width: 2px; bor
   .step-card { grid-template-columns: 35px 1fr; }
   .step-rail { padding-left: 5px; padding-right: 5px; }
   .export-actions { flex-wrap: wrap; }
+  .import-body { grid-template-columns: 1fr; overflow: auto; }
+  .import-preview { border-right: 0; border-bottom: 1px solid var(--line); }
+  .import-notices { max-height: 280px; }
 }
