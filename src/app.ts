@@ -1,5 +1,6 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
+import { parseProofDraft, type ParsedDraft } from './importer';
 import { compareVersion, ProofStore, RULES } from './store';
 import type { ProofDocument, ProofStep } from './types';
 
@@ -25,7 +26,16 @@ const typeLabel: Record<ProofStep['type'], string> = {
   premise: '前提',
   derivation: '推导',
   goal: '目标 / 结论',
+  unknown: '待辨认',
 };
+
+function ruleOptions(selected: string): string[] {
+  return RULES.includes(selected) ? RULES : [selected, ...RULES];
+}
+
+function asStepType(value: string): ProofStep['type'] {
+  return ['premise', 'derivation', 'goal', 'unknown'].includes(value) ? value as ProofStep['type'] : 'derivation';
+}
 
 function renderRichText(text: string): m.Children {
   const parts = text.split(/(\$[^$]+\$)/g);
@@ -60,11 +70,12 @@ function exportMarkdown(document: ProofDocument): string {
     lines.push(`## ${index + 1}. ${step.statement}`);
     lines.push('');
     lines.push(`- 类型：${typeLabel[step.type]}`);
-    lines.push(`- 推理规则：${step.rule}`);
+    lines.push(`- 推理规则：${step.rule || '待补'}`);
     if (refs.length) lines.push(`- 依据：${refs.join('、')}`);
     if (step.note) lines.push(`- 旁注：${step.note}`);
     if (step.counterexample) lines.push(`- 反例：${step.counterexample}`);
     if (step.alternative) lines.push(`- 替代分支：${step.alternative}`);
+    if (step.unparsed) step.unparsed.split('\n').forEach((line) => lines.push(`- 待辨认原文：${line}`));
     lines.push('');
   });
   lines.push('## 符号表');
@@ -73,18 +84,39 @@ function exportMarkdown(document: ProofDocument): string {
 }
 
 function exportLatex(document: ProofDocument): string {
-  const lines = ['\\documentclass{article}', '\\usepackage{amsmath,amssymb}', '\\begin{document}', `\\section*{${document.title}}`, `\\textbf{证明目标：} $${document.goal}$`, '\\begin{enumerate}'];
+  const lines = [
+    '\\documentclass{article}',
+    '\\usepackage{amsmath,amssymb}',
+    '\\begin{document}',
+    `\\section*{${document.title}}`,
+    `\\textbf{证明目标：} $${document.goal}$`,
+    '\\begin{enumerate}',
+  ];
   document.steps.forEach((step) => {
     const refs = step.references.map((id) => document.steps.findIndex((item) => item.id === id) + 1).filter(Boolean);
-    const support = refs.length ? `（依据 ${refs.join(', ')}；${step.rule}）` : `（${step.rule}）`;
-    lines.push(`  \\item ${step.statement} ${support}`);
+    lines.push(`  \\item ${step.statement}`);
+    lines.push(`  % 类型：${typeLabel[step.type]}`);
+    lines.push(`  % 推理规则：${step.rule || '待补'}`);
+    if (refs.length) lines.push(`  % 依据：步骤 ${refs.join('、')}`);
     if (step.note) lines.push(`  \\par\\small 旁注：${step.note}`);
+    if (step.counterexample) lines.push(`  \\par\\small 反例：${step.counterexample}`);
+    if (step.alternative) lines.push(`  \\par\\small 替代分支：${step.alternative}`);
+    if (step.unparsed) lines.push(`  % 待辨认原文：${step.unparsed.replace(/\n/g, ' ')}`);
   });
-  lines.push('\\end{enumerate}', '\\end{document}');
+  lines.push('\\end{enumerate}');
+  if (Object.keys(document.symbols).length) {
+    lines.push('\\section*{符号表}');
+    Object.entries(document.symbols).forEach(([symbol, meaning]) => lines.push(`- $${symbol}$：${meaning}`));
+  }
+  lines.push('\\end{document}');
   return lines.join('\n');
 }
 
 export class ProofApp implements Component {
+  private importOpen = false;
+  private importText = '';
+  private importedDraft: ParsedDraft | null = null;
+
   private readonly onKeyDown = (event: KeyboardEvent) => {
     const target = event.target as HTMLElement;
     const inEditor = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
@@ -137,6 +169,38 @@ export class ProofApp implements Component {
 
   onremove(): void {
     window.removeEventListener('keydown', this.onKeyDown);
+  }
+
+  private openImport(): void {
+    this.importOpen = true;
+    this.importText = '';
+    this.importedDraft = null;
+  }
+
+  private closeImport(): void {
+    this.importOpen = false;
+  }
+
+  private updateImportText(value: string): void {
+    this.importText = value;
+    this.importedDraft = value.trim() ? parseProofDraft(value) : null;
+  }
+
+  private readImportFile(file: File): void {
+    const reader = new FileReader();
+    reader.onload = () => {
+      this.updateImportText(String(reader.result ?? ''));
+      m.redraw();
+    };
+    reader.readAsText(file, 'utf-8');
+  }
+
+  private confirmImport(): void {
+    if (!this.importedDraft || !this.importedDraft.steps.length) return;
+    store.importDraft(this.importedDraft);
+    this.importOpen = false;
+    store.notify(this.importedDraft.warnings.length ? `已导入，但有 ${this.importedDraft.warnings.length} 处需核对` : '证明稿已完整导入');
+    m.redraw();
   }
 
   view(): m.Children {
@@ -209,10 +273,16 @@ export class ProofApp implements Component {
               m('div.editor-meta', [`${document.author} · ${document.steps.length} 个步骤`, m('span.keyboard-hint', '拖动 ⠿ 排序')]),
             ]),
             m('div.export-actions', [
+              m('button.button.is-small.is-white', { onclick: () => this.openImport() }, '读入稿件'),
               m('button.button.is-small', { onclick: () => download(`${document.title}.md`, exportMarkdown(document), 'text/markdown;charset=utf-8') }, '导出 Markdown'),
               m('button.button.is-small', { onclick: () => download(`${document.title}.tex`, exportLatex(document), 'application/x-tex;charset=utf-8') }, '导出 LaTeX'),
             ]),
           ]),
+          document.importWarnings?.length ? m('div.import-banner', [
+            m('strong', `导入稿有 ${document.importWarnings.length} 处需核对`),
+            m('ul', document.importWarnings.slice(0, 4).map((warning) => m('li', warning))),
+            document.importWarnings.length > 4 && m('small', `其余 ${document.importWarnings.length - 4} 项见右侧检查结果。`),
+          ]) : null,
           m('section.goal-card', [
             m('div.goal-label', '证明目标'),
             m('div.goal-formula', renderRichText(`$${document.goal}$`)),
@@ -248,7 +318,7 @@ export class ProofApp implements Component {
               ]),
               m('div.step-body', [
                 m('div.step-head', [
-                  m('span.tag', { class: step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : 'is-light' }, typeLabel[step.type]),
+                  m('span.tag', { class: step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : step.type === 'unknown' ? 'is-warning' : 'is-light' }, typeLabel[step.type]),
                   m('span.rule-chip', step.rule),
                   m('span.step-id', `#${shortId(step.id)}`),
                   stepChecks.length > 0 && m('span.issue-badge', `${stepChecks.length} 项检查`),
@@ -263,6 +333,7 @@ export class ProofApp implements Component {
                   step.note && m('span.has-note', '含旁注'),
                   step.counterexample && m('span.has-counterexample', '含反例'),
                   step.alternative && m('span.has-branch', '含替代分支'),
+                  (step.type === 'unknown' || step.unparsed) && m('span.has-unparsed', '待辨认原文'),
                 ]),
               ]),
             ]);
@@ -272,9 +343,9 @@ export class ProofApp implements Component {
           selected ? m('section.panel.inspector', [
             m('div.panel-heading', [m('span', '步骤检查器'), m('span.inspector-step', `#${shortId(selected.id)}`)]),
             m('label.field-label', '步骤类型'),
-            m('div.select.is-fullwidth', m('select', { value: selected.type, onchange: (event: Event) => store.updateStep({ type: (event.target as HTMLSelectElement).value as ProofStep['type'] }) }, Object.entries(typeLabel).map(([value, label]) => m('option', { value }, label)))),
+            m('div.select.is-fullwidth', m('select', { value: selected.type, onchange: (event: Event) => store.updateStep({ type: asStepType((event.target as HTMLSelectElement).value) }) }, Object.entries(typeLabel).map(([value, label]) => m('option', { value }, label)))),
             m('label.field-label', '推理规则'),
-            m('div.select.is-fullwidth', m('select', { value: selected.rule, onchange: (event: Event) => store.updateStep({ rule: (event.target as HTMLSelectElement).value }) }, RULES.map((rule) => m('option', { value: rule }, rule)))),
+            m('div.select.is-fullwidth', m('select', { value: selected.rule, onchange: (event: Event) => store.updateStep({ rule: (event.target as HTMLSelectElement).value }) }, ruleOptions(selected.rule).map((rule) => m('option', { value: rule }, rule || '未填写')))),
             m('label.field-label', '命题或推导式'),
             m('textarea.textarea.formula-textarea', {
               value: selected.statement,
@@ -318,6 +389,7 @@ export class ProofApp implements Component {
               m('div', [m('label.field-label', '旁注'), m('textarea.textarea.is-small', { rows: 2, value: selected.note, placeholder: '记录思路或条件', oninput: (event: Event) => store.updateStep({ note: (event.target as HTMLTextAreaElement).value }) })]),
               m('div', [m('label.field-label', '反例 / 边界情况'), m('textarea.textarea.is-small', { rows: 2, value: selected.counterexample, placeholder: '尝试寻找反例', oninput: (event: Event) => store.updateStep({ counterexample: (event.target as HTMLTextAreaElement).value }) })]),
               m('div', [m('label.field-label', '替代分支'), m('textarea.textarea.is-small', { rows: 2, value: selected.alternative, placeholder: '另一种可行推导', oninput: (event: Event) => store.updateStep({ alternative: (event.target as HTMLTextAreaElement).value }) })]),
+              (selected.type === 'unknown' || selected.unparsed) && m('div', [m('label.field-label', '待辨认原文'), m('textarea.textarea.is-small', { rows: 3, value: selected.unparsed ?? '', placeholder: '导入时无法归入字段的原文', oninput: (event: Event) => store.updateStep({ unparsed: (event.target as HTMLTextAreaElement).value }) })]),
             ]),
             m('button.button.is-small.is-white.is-fullwidth.add-symbol', {
               onclick: () => {
@@ -373,6 +445,54 @@ export class ProofApp implements Component {
               m('span', item.before || '—'),
               m('span', item.after || '—'),
             ])),
+          ]),
+        ]),
+      ]),
+      this.importOpen && m('div.import-overlay', { onclick: () => this.closeImport() }, [
+        m('section.import-dialog', {
+          onclick: (event: Event) => event.stopPropagation(),
+          onkeydown: (event: KeyboardEvent) => event.stopPropagation(),
+        }, [
+          m('header.import-head', [
+            m('div', [m('span.eyebrow', 'ROUNDTRIP IMPORT'), m('h2', '读回证明稿')]),
+            m('button.delete', { onclick: () => this.closeImport() }, '×'),
+          ]),
+          m('div.import-body', [
+            m('div.import-input-pane', [
+              m('label.file-picker', [
+                m('input', { type: 'file', accept: '.md,.markdown,.txt,.tex', onchange: (event: Event) => {
+                  const file = (event.target as HTMLInputElement).files?.[0];
+                  if (file) this.readImportFile(file);
+                } }),
+                m('span.button.button.is-small.is-link', '选择 Markdown / LaTeX 文件'),
+              ]),
+              m('textarea.import-textarea', {
+                placeholder: '也可以直接把群里发回的导出稿粘贴到这里……',
+                value: this.importText,
+                oninput: (event: Event) => this.updateImportText((event.target as HTMLTextAreaElement).value),
+              }),
+            ]),
+            m('div.import-preview', this.importedDraft ? [
+              m('h3', this.importedDraft.title),
+              m('p', `证明目标：${this.importedDraft.goal}`),
+              m('div.import-stats', [
+                m('span.tag.is-info', `${this.importedDraft.steps.length} 个步骤`),
+                m('span.tag.is-warning', `${this.importedDraft.steps.filter((step) => step.type === 'unknown').length} 个待辨认`),
+                m('span.tag.is-light', `${Object.keys(this.importedDraft.symbols).length} 个符号`),
+              ]),
+              m('div.import-step-preview', this.importedDraft.steps.map((step, index) => m('div', [
+                m('strong', `${index + 1}. ${typeLabel[step.type]}`),
+                m('span', step.statement || '（空步骤）'),
+              ]))),
+              this.importedDraft.warnings.length > 0 && m('ul.import-warnings', this.importedDraft.warnings.map((warning) => m('li', warning))),
+            ] : m('p.empty-copy', '粘贴或选择文件后，会先预览能恢复的步骤；读不懂的内容会原样保留并在此提示。')),
+          ]),
+          m('footer.import-footer', [
+            m('span', this.importedDraft?.warnings.length ? `导入后有 ${this.importedDraft.warnings.length} 条核对备注` : '不会覆盖当前文档，将创建为新稿'),
+            m('div', [
+              m('button.button', { onclick: () => this.closeImport() }, '取消'),
+              m('button.button.is-link', { disabled: !this.importedDraft?.steps.length, onclick: () => this.confirmImport() }, '创建可编辑新稿'),
+            ]),
           ]),
         ]),
       ]),

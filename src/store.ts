@@ -1,4 +1,5 @@
 import { redraw } from 'mithril';
+import type { ParsedDraft } from './importer';
 import type { ProofCheck, ProofDocument, ProofStep, ProofVersion } from './types';
 
 const STORAGE_KEY = 'sologsb-1014-proof-workspace-v1';
@@ -154,6 +155,28 @@ export class ProofStore {
     this.save();
   }
 
+  importDraft(draft: ParsedDraft): void {
+    const now = new Date().toISOString();
+    const document: ProofDocument = {
+      id: uid('doc'),
+      title: draft.title,
+      author: '导入稿',
+      goal: draft.goal,
+      symbols: clone(draft.symbols),
+      steps: clone(draft.steps),
+      versions: [],
+      updatedAt: now,
+      importWarnings: clone(draft.warnings),
+    };
+    this.undoStack.push(clone(this.documents));
+    this.redoStack = [];
+    this.documents.unshift(document);
+    this.activeId = document.id;
+    this.compareVersionId = '';
+    this.selectedStepId = document.steps[0]?.id ?? '';
+    this.save();
+  }
+
   removeDocument(id: string): void {
     if (this.documents.length <= 1) {
       this.notify('至少保留一个证明文档');
@@ -249,6 +272,10 @@ export function validate(document: ProofDocument): ProofCheck[] {
   const ignored = new Set(['a', 'A', 'b', 'B', 'n', 'k', 'P', 'Q', 'R', 'x', 'y', 'to', 'text', 'frac', 'sqrt']);
 
   document.steps.forEach((step, index) => {
+    if (step.type === 'unknown') {
+      checks.push({ id: `unknown-${step.id}`, severity: 'warning', title: '存在待辨认内容', detail: `步骤 ${index + 1} 保留了导入时无法可靠解析的原文。`, stepId: step.id });
+    }
+
     const tokens = stripLatexCommands(step.statement).match(/\b[A-Za-z][A-Za-z0-9']*\b/g) ?? [];
     const unknown = [...new Set(tokens.filter((token) => !symbolKeys.has(token) && !ignored.has(token)))];
     if (unknown.length) {
@@ -283,12 +310,21 @@ export function validate(document: ProofDocument): ProofCheck[] {
     checks.push({ id: 'cycle', severity: 'error', title: '检测到循环引用', detail: '引用链形成闭环，请调整步骤关系。', stepId: [...cycleStep][0] });
   }
 
-  const goalStep = document.steps.find((step) => step.type === 'goal' && step.rule === '结论');
+  const goalStep = document.steps.find((step) => step.type === 'goal');
   if (!goalStep) {
     checks.push({ id: 'goal-missing', severity: 'error', title: '目标未被证明', detail: '请添加“结论”类型的最终步骤。' });
-  } else if (goalStep.references.length === 0) {
-    checks.push({ id: 'goal-unlinked', severity: 'warning', title: '结论尚无推导支撑', detail: '最终步骤没有引用任何前置步骤。', stepId: goalStep.id });
+  } else {
+    if (goalStep.rule !== '结论') {
+      checks.push({ id: 'goal-rule', severity: 'warning', title: '结论规则待确认', detail: `最终步骤当前使用“${goalStep.rule || '未填写'}”。`, stepId: goalStep.id });
+    }
+    if (goalStep.references.length === 0) {
+      checks.push({ id: 'goal-unlinked', severity: 'warning', title: '结论尚无推导支撑', detail: '最终步骤没有引用任何前置步骤。', stepId: goalStep.id });
+    }
   }
+
+  (document.importWarnings ?? []).forEach((warning, index) => {
+    checks.push({ id: `import-warning-${index}`, severity: 'warning', title: '导入备注', detail: warning });
+  });
 
   if (!checks.some((check) => check.severity === 'error')) {
     checks.push({ id: 'proof-ok', severity: 'info', title: '结构检查通过', detail: '未发现缺失引用、循环引用或未证明目标。' });

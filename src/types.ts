@@ -1,4 +1,4 @@
-export type StepType = 'premise' | 'derivation' | 'goal';
+export type StepType = 'premise' | 'derivation' | 'goal' | 'unknown';
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
 export interface ProofStep {
@@ -10,6 +10,7 @@ export interface ProofStep {
   note: string;
   counterexample: string;
   alternative: string;
+  unparsed?: string;
 }
 
 export interface ProofVersion {
@@ -29,6 +30,7 @@ export interface ProofDocument {
   steps: ProofStep[];
   versions: ProofVersion[];
   updatedAt: string;
+  importWarnings?: string[];
 }
 
 export interface ProofCheck {
